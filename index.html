@@ -1,0 +1,401 @@
+<!DOCTYPE html>
+<html lang="tr">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Pakettaxi Yönlendirme</title>
+    
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&display=swap" rel="stylesheet">
+    
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://unpkg.com/react@18.2.0/umd/react.production.min.js"></script>
+    <script src="https://unpkg.com/react-dom@18.2.0/umd/react-dom.production.min.js"></script>
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js/dist/chart.umd.js"></script>
+    
+    <script>
+        Babel.registerPreset("react-classic", {
+            presets: [
+                [Babel.availablePresets["react"], { "runtime": "classic" }]
+            ]
+        });
+    </script>
+    <style>
+        body { font-family: 'Inter', sans-serif; background-color: #f8fafc; color: #1e293b; font-size: 12px; margin: 0; padding: 0; }
+        .animate-in { animation: fadeIn 0.3s ease-out; }
+        @keyframes fadeIn { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
+        
+        ::-webkit-scrollbar { width: 6px; height: 6px; }
+        ::-webkit-scrollbar-track { background: transparent; }
+        ::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 4px; }
+        ::-webkit-scrollbar-thumb:hover { background: #94a3b8; }
+        
+        .save-indicator { position: fixed; top-4; right-4; z-index: 1000; padding: 12px 16px; border-radius: 8px; font-weight: 900; font-size: 12px; animation: slideIn 0.3s ease-out; }
+        @keyframes slideIn { from { transform: translateX(400px); opacity: 0; } to { transform: translateX(0); opacity: 1; } }
+    </style>
+</head>
+<body>
+    <div id="root"></div>
+    <script type="text/babel" data-presets="env,react-classic">
+        const { useState, useMemo, useEffect, useCallback, Fragment } = React;
+        
+        // LocalStorage Helper
+        const StorageManager = {
+            save: (key, data) => {
+                try {
+                    localStorage.setItem(`pakettaxi_${key}`, JSON.stringify(data));
+                    return true;
+                } catch(e) {
+                    console.error('Storage Error:', e);
+                    return false;
+                }
+            },
+            load: (key, defaultValue = null) => {
+                try {
+                    const item = localStorage.getItem(`pakettaxi_${key}`);
+                    return item ? JSON.parse(item) : defaultValue;
+                } catch(e) {
+                    console.error('Storage Error:', e);
+                    return defaultValue;
+                }
+            },
+            remove: (key) => {
+                try {
+                    localStorage.removeItem(`pakettaxi_${key}`);
+                    return true;
+                } catch(e) {
+                    return false;
+                }
+            },
+            clear: () => {
+                try {
+                    const keys = Object.keys(localStorage);
+                    keys.forEach(key => {
+                        if(key.startsWith('pakettaxi_')) {
+                            localStorage.removeItem(key);
+                        }
+                    });
+                    return true;
+                } catch(e) {
+                    return false;
+                }
+            }
+        };
+
+        const normalizeStr = (s) => s ? s.toString().toUpperCase().trim().replace(/\s+/g, " ") : "";
+
+        const App = () => {
+            const [view, setView] = useState('upload');
+            const [uploadError, setUploadError] = useState('');
+            const [saveMessage, setSaveMessage] = useState(null);
+            
+            const [rawMaster, setRawMaster] = useState(() => StorageManager.load('masterData', ''));
+            const [rawPerf, setRawPerf] = useState(() => StorageManager.load('perfData', ''));
+            const [rawMessenger, setRawMessenger] = useState(() => StorageManager.load('messengerData', ''));
+
+            const [storeList, setStoreList] = useState(() => StorageManager.load('storeList', []));
+            const [perfData, setPerfData] = useState(() => StorageManager.load('perfDataParsed', []));
+            const [messengerData, setMessengerData] = useState(() => StorageManager.load('messengerDataParsed', []));
+            const [liveTrends, setLiveTrends] = useState(() => StorageManager.load('liveTrends', {}));
+            const [search, setSearch] = useState('');
+
+            // Auto-save to LocalStorage
+            useEffect(() => { StorageManager.save('masterData', rawMaster); }, [rawMaster]);
+            useEffect(() => { StorageManager.save('perfData', rawPerf); }, [rawPerf]);
+            useEffect(() => { StorageManager.save('messengerData', rawMessenger); }, [rawMessenger]);
+            useEffect(() => { StorageManager.save('storeList', storeList); }, [storeList]);
+            useEffect(() => { StorageManager.save('perfDataParsed', perfData); }, [perfData]);
+            useEffect(() => { StorageManager.save('messengerDataParsed', messengerData); }, [messengerData]);
+            useEffect(() => { StorageManager.save('liveTrends', liveTrends); }, [liveTrends]);
+
+            const processedData = useMemo(() => {
+                if (!perfData.length) return [];
+                return perfData.map(p => {
+                    const master = storeList.find(s => (s.code || "").toString().trim() === (p.region_id || "").toString().trim());
+                    return {
+                        ...p,
+                        clean: p.name || (master ? master.name : "BİLİNMİYOR"),
+                        city: master ? master.city : "BİLİNMİYOR",
+                        district: master ? master.district : "BİLİNMİYOR"
+                    };
+                }).sort((a, b) => (b.oph || 0) - (a.oph || 0));
+            }, [storeList, perfData]);
+
+            const handleAnalyze = () => {
+                if (!rawMaster.trim() || !rawPerf.trim() || !rawMessenger.trim()) {
+                    setUploadError("⚠️ Lütfen tüm alanlara Excel verilerinizi yapıştırın.");
+                    return;
+                }
+                setUploadError('');
+
+                try {
+                    const processCSV = (text) => {
+                        if (!text) return [];
+                        const lines = text.split(/\r?\n/).filter(l => l.trim() !== '');
+                        if (lines.length < 2) return [];
+                        const delimiter = lines[0].includes('\t') ? '\t' : (lines[0].includes(';') ? ';' : ',');
+                        const rawHeaders = lines[0].split(delimiter);
+                        const headers = rawHeaders.map(h => normalizeStr(h).replace(/[\s_]/g, ''));
+                        return lines.slice(1).map(line => {
+                            const cols = line.split(delimiter);
+                            const obj = {};
+                            headers.forEach((h, i) => { obj[h] = cols[i] !== undefined ? cols[i].trim() : ''; });
+                            return obj;
+                        });
+                    };
+
+                    const parseNum = (val) => {
+                        if (!val) return 0;
+                        let str = val.toString().trim().replace(',', '.'); 
+                        let parsed = parseFloat(str);
+                        return isNaN(parsed) ? 0 : parsed;
+                    };
+                    
+                    const masterData = processCSV(rawMaster);
+                    const perfParsed = processCSV(rawPerf);
+                    const messParsed = processCSV(rawMessenger);
+
+                    if (masterData.length === 0 || perfParsed.length === 0 || messParsed.length === 0) {
+                        setUploadError("HATA: Veriler eksik veya hatalı formatta.");
+                        return;
+                    }
+
+                    setStoreList(masterData.map(d => ({ 
+                        code: d['MAGAZAKODU'] || d['REGIONID'] || "", 
+                        name: d['MAGAZAADI'] || d['NAME'] || "", 
+                        city: normalizeStr(d['IL'] || d['CITY']), 
+                        district: normalizeStr(d['ILCE'] || d['DISTRICT'])
+                    })));
+                    
+                    setPerfData(perfParsed.map(d => ({
+                        region_id: (d['REGIONID'] || d['MAGAZAKODU'] || "").toString(),
+                        name: (d['NAME'] || d['MAGAZAADI'] || "").toString(),
+                        zoneManager: (d['ZONEMANAGER'] || d['BOLGEMUDURU'] || "BİLİNMİYOR").toString(),
+                        hemenSiparis: parseNum(d['HEMENSIPARISSAYISI'] || d['HEMENSIPARIS']),
+                        yemekSiparis: parseNum(d['YEMEKSIPARISSAYISI'] || d['YEMEKSIPARIS']),
+                        dk45Siparis: parseNum(d['45DKSIPARISSAYISI'] || d['45DKSIPARIS']),
+                        hemenLT: parseNum(d['HEMENLEADTIME'] || d['HEMENLT']),
+                        yemekLT: parseNum(d['YEMEKLEADTIME'] || d['YEMEKLT']),
+                        dk45LT: parseNum(d['45DKLEADTIME'] || d['45DKLT']),
+                        hemenToplama: parseNum(d['HEMENTOPLAMASURESI'] || d['HEMENTOPLAMA']),
+                        dk45Toplama: parseNum(d['45DKTOPLAMASURESI'] || d['45DKTOPLAMA']),
+                        oph: parseNum(d['OPH2'] || d['OPH'])
+                    })));
+
+                    setMessengerData(messParsed.map(d => ({ 
+                        store: d['BOLGE'] || d['MAGAZA'] || d['STORE'],
+                        courierName: d['KURYEADI'] || d['COURIERNAME'],
+                        status: d['STATU'] || d['KURYEDURUMU'] || d['STATUS'] || d['DURUM']
+                    })));
+
+                    setView('dashboard');
+                    setSaveMessage('✓ Veriler Yüklendi!');
+                    setTimeout(() => setSaveMessage(null), 2000);
+                } catch(err) {
+                    setUploadError("Veri ayrıştırma hatası!");
+                }
+            };
+
+            const handleClearDaily = () => {
+                if(window.confirm('Günlük verileri temizlemek istediğinize emin misiniz?')) {
+                    setLiveTrends({});
+                    setMessengerData([]);
+                    setPerfData([]);
+                    setRawPerf('');
+                    setRawMessenger('');
+                    setSaveMessage('✓ Günlük Veriler Temizlendi!');
+                    setTimeout(() => setSaveMessage(null), 2000);
+                }
+            };
+
+            const handleExportToCSV = () => {
+                let csv = "MAGAZAKODU\tMAGAZAADI\tHEMENSIPARIS\tYEMEKSIPARIS\t45DKSIPARIS\tHEMENTOPLAMA\tHEMENLT\tYEMEKLT\t45DKLT\n";
+                processedData.forEach(s => {
+                    csv += `${s.region_id}\t${s.clean}\t${s.hemenSiparis || 0}\t${s.yemekSiparis || 0}\t${s.dk45Siparis || 0}\t${(s.hemenToplama || 0).toFixed(1)}\t${(s.hemenLT || 0).toFixed(1)}\t${(s.yemekLT || 0).toFixed(1)}\t${(s.dk45LT || 0).toFixed(1)}\n`;
+                });
+                
+                const el = document.createElement('textarea');
+                el.value = csv;
+                document.body.appendChild(el);
+                el.select();
+                document.execCommand('copy');
+                document.body.removeChild(el);
+                
+                setSaveMessage('✓ CSV Kopyalandı!');
+                setTimeout(() => setSaveMessage(null), 2000);
+            };
+
+            return (
+                <div className="min-h-screen pb-16 bg-gray-50">
+                    {saveMessage && (
+                        <div className="save-indicator bg-green-500 text-white shadow-lg">
+                            {saveMessage}
+                        </div>
+                    )}
+
+                    <header className="bg-white border-b border-gray-200 px-6 py-4 sticky top-0 z-50 shadow-sm">
+                        <div className="flex justify-between items-center">
+                            <h1 className="text-2xl font-black uppercase italic text-slate-900">
+                                PAKETTAXI <span className="text-orange-600">YÖNLENDİRME</span>
+                            </h1>
+                            <nav className="flex gap-2">
+                                {['upload', 'dashboard'].map(v => (
+                                    <button 
+                                        key={v} 
+                                        onClick={() => setView(v)} 
+                                        className={`px-4 py-2 rounded font-bold text-sm uppercase transition-all ${
+                                            view === v 
+                                                ? 'bg-orange-600 text-white shadow-md' 
+                                                : 'bg-gray-200 text-gray-700 hover:bg-gray-300'
+                                        }`}
+                                    >
+                                        {v === 'upload' ? '📤 YÜKLE' : '📊 DASHBOARD'}
+                                    </button>
+                                ))}
+                            </nav>
+                        </div>
+                    </header>
+
+                    <main className="max-w-7xl mx-auto p-6">
+                        {view === 'upload' && (
+                            <div className="space-y-4">
+                                {uploadError && (
+                                    <div className="bg-red-100 border border-red-400 text-red-700 px-4 py-3 rounded font-bold">
+                                        {uploadError}
+                                    </div>
+                                )}
+                                <div className="grid md:grid-cols-3 gap-4">
+                                    <div>
+                                        <label className="block text-center font-black text-gray-700 mb-2 uppercase text-sm">İL / İLÇE</label>
+                                        <textarea 
+                                            className="w-full h-96 p-3 border-2 border-gray-300 rounded-lg font-mono text-sm focus:border-blue-500 focus:outline-none resize-none" 
+                                            value={rawMaster} 
+                                            onChange={e => setRawMaster(e.target.value)} 
+                                            placeholder="Master Liste Verilerinizi Yapıştırın..."
+                                        />
+                                    </div>
+                                    <div>
+                                        <label className="block text-center font-black text-gray-700 mb-2 uppercase text-sm">Performans Verileri</label>
+                                        <textarea 
+                                            className="w-full h-96 p-3 border-2 border-gray-300 rounded-lg font-mono text-sm focus:border-blue-500 focus:outline-none resize-none" 
+                                            value={rawPerf} 
+                                            onChange={e => setRawPerf(e.target.value)} 
+                                            placeholder="Performans Verilerini Yapıştırın..."
+                                        />
+                                    </div>
+                                    <div>
+                                        <label className="block text-center font-black text-gray-700 mb-2 uppercase text-sm">Kurye Durumu</label>
+                                        <textarea 
+                                            className="w-full h-96 p-3 border-2 border-gray-300 rounded-lg font-mono text-sm focus:border-blue-500 focus:outline-none resize-none" 
+                                            value={rawMessenger} 
+                                            onChange={e => setRawMessenger(e.target.value)} 
+                                            placeholder="Kurye Verilerini Yapıştırın..."
+                                        />
+                                    </div>
+                                </div>
+                                <button 
+                                    onClick={handleAnalyze}
+                                    className="w-full py-4 bg-slate-900 text-white text-xl font-black rounded-lg hover:bg-slate-800 transition-all uppercase italic shadow-lg"
+                                >
+                                    🚀 SİSTEMİ BAŞLAT
+                                </button>
+                            </div>
+                        )}
+
+                        {view === 'dashboard' && (
+                            <div className="space-y-4">
+                                <div className="flex gap-2 mb-4">
+                                    {processedData.length > 0 && (
+                                        <>
+                                            <button 
+                                                onClick={handleExportToCSV}
+                                                className="px-4 py-2 bg-blue-600 text-white font-bold rounded hover:bg-blue-700 transition-all"
+                                            >
+                                                📊 CSV İNDİR
+                                            </button>
+                                            <button 
+                                                onClick={handleClearDaily}
+                                                className="px-4 py-2 bg-red-600 text-white font-bold rounded hover:bg-red-700 transition-all"
+                                            >
+                                                🗑️ GÜN. TEMİZLE
+                                            </button>
+                                        </>
+                                    )}
+                                </div>
+
+                                <input 
+                                    type="text" 
+                                    placeholder="🔍 Mağaza Ara..." 
+                                    value={search} 
+                                    onChange={e => setSearch(e.target.value)}
+                                    className="w-full p-3 border-2 border-gray-300 rounded-lg font-bold text-lg focus:border-orange-500 focus:outline-none"
+                                />
+
+                                <div className="grid gap-3">
+                                    {processedData.length === 0 ? (
+                                        <div className="text-center p-10 text-gray-500 font-bold">
+                                            <p>Veri bulunamadı. Lütfen yukarıdan veri yükleyin.</p>
+                                        </div>
+                                    ) : (
+                                        processedData
+                                            .filter(s => normalizeStr(s.clean).includes(normalizeStr(search)) || (s.region_id || "").includes(search))
+                                            .map((s) => (
+                                                <div key={s.region_id} className="bg-white p-4 rounded-lg border border-gray-200 shadow-sm hover:shadow-md transition-all">
+                                                    <div className="flex justify-between items-start mb-3">
+                                                        <div>
+                                                            <h3 className="text-lg font-black text-gray-900 uppercase">{s.clean}</h3>
+                                                            <p className="text-sm text-gray-500">{s.city} / {s.district}</p>
+                                                        </div>
+                                                        <div className="text-right">
+                                                            <div className="text-2xl font-black text-blue-600">{(s.oph || 0).toFixed(2)}</div>
+                                                            <div className="text-xs text-gray-500">OPH</div>
+                                                        </div>
+                                                    </div>
+                                                    
+                                                    <div className="grid grid-cols-3 gap-2 mt-3">
+                                                        <div className="bg-orange-50 p-3 rounded border border-orange-200">
+                                                            <div className="text-xs font-bold text-orange-600 uppercase mb-1">Hemen Toplama</div>
+                                                            <div className="text-xl font-black text-orange-900">{(s.hemenToplama || 0).toFixed(1)}</div>
+                                                        </div>
+                                                        <div className="bg-blue-50 p-3 rounded border border-blue-200">
+                                                            <div className="text-xs font-bold text-blue-600 uppercase mb-1">Hemen LT</div>
+                                                            <div className="text-xl font-black text-blue-900">{(s.hemenLT || 0).toFixed(1)}</div>
+                                                        </div>
+                                                        <div className="bg-red-50 p-3 rounded border border-red-200">
+                                                            <div className="text-xs font-bold text-red-600 uppercase mb-1">Yemek LT</div>
+                                                            <div className="text-xl font-black text-red-900">{(s.yemekLT || 0).toFixed(1)}</div>
+                                                        </div>
+                                                    </div>
+
+                                                    <div className="grid grid-cols-3 gap-2 mt-2">
+                                                        <div className="bg-purple-50 p-2 rounded border border-purple-200 text-center">
+                                                            <div className="text-xs font-bold text-purple-600">Hemen Sipariş</div>
+                                                            <div className="text-lg font-black text-purple-900">{s.hemenSiparis || 0}</div>
+                                                        </div>
+                                                        <div className="bg-green-50 p-2 rounded border border-green-200 text-center">
+                                                            <div className="text-xs font-bold text-green-600">Yemek Sipariş</div>
+                                                            <div className="text-lg font-black text-green-900">{s.yemekSiparis || 0}</div>
+                                                        </div>
+                                                        <div className="bg-indigo-50 p-2 rounded border border-indigo-200 text-center">
+                                                            <div className="text-xs font-bold text-indigo-600">45DK Sipariş</div>
+                                                            <div className="text-lg font-black text-indigo-900">{s.dk45Siparis || 0}</div>
+                                                        </div>
+                                                    </div>
+                                                </div>
+                                            ))
+                                    )}
+                                </div>
+                            </div>
+                        )}
+                    </main>
+                </div>
+            );
+        };
+
+        const root = ReactDOM.createRoot(document.getElementById('root'));
+        root.render(<App />);
+    </script>
+</body>
+</html>
